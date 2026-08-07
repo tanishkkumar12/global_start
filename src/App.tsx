@@ -223,10 +223,17 @@ export default function App() {
   const [phoneSearch, setPhoneSearch] = useState("");
   const [selectedOrderForTracking, setSelectedOrderForTracking] = useState<string | null>(null);
   const [customApiKey, setCustomApiKey] = useState(() => localStorage.getItem("resto_gemini_api_key") || "");
+  const [customOpenRouterKey, setCustomOpenRouterKey] = useState(() => localStorage.getItem("resto_openrouter_api_key") || "");
 
   const handleApiKeyChange = (val: string) => {
     setCustomApiKey(val);
     localStorage.setItem("resto_gemini_api_key", val.trim());
+    aiRef.current = null;
+  };
+
+  const handleOpenRouterKeyChange = (val: string) => {
+    setCustomOpenRouterKey(val);
+    localStorage.setItem("resto_openrouter_api_key", val.trim());
     aiRef.current = null;
   };
 
@@ -819,11 +826,29 @@ export default function App() {
                         placeholder="e.g., friendly, efficient, witty"
                       />
                     </div>
+                    <div className="space-y-3 md:col-span-2 pt-3 border-t border-gray-100">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <label className="text-[10px] uppercase tracking-widest text-gray-400 font-bold ml-1">OpenRouter API Key</label>
+                        <span className="text-[9px] text-[#d2691e] font-semibold bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
+                          Environment & Local Fallback
+                        </span>
+                      </div>
+                      <input 
+                        type="password" 
+                        value={customOpenRouterKey}
+                        onChange={(e) => handleOpenRouterKeyChange(e.target.value)}
+                        className="w-full bg-[#f9f9f9] border border-transparent rounded-2xl px-4 py-3 focus:bg-white focus:border-[#d2691e] outline-none transition-all font-mono text-xs"
+                        placeholder="sk-or-v1-..."
+                      />
+                      <p className="text-[10px] text-gray-400 ml-1">
+                        Server reads <code className="text-gray-600 bg-gray-100 px-1 py-0.5 rounded">OPENROUTER_API_KEY</code> from environment variables. You can also save a key locally for direct browser client calls.
+                      </p>
+                    </div>
                     <div className="space-y-1.5 md:col-span-2 pt-3 border-t border-gray-100">
                       <div className="flex flex-wrap items-center justify-between gap-1">
-                        <label className="text-[10px] uppercase tracking-widest text-gray-400 font-bold ml-1">Custom Gemini API Key (Client Fallback)</label>
-                        <span className="text-[9px] text-[#d2691e] font-semibold bg-amber-50 px-2 py-0.5 rounded-full border border-amber-100">
-                          Optional for static hosting (Vercel / Netlify / GitHub Pages)
+                        <label className="text-[10px] uppercase tracking-widest text-gray-400 font-bold ml-1">Custom Gemini API Key (Optional)</label>
+                        <span className="text-[9px] text-gray-500 font-semibold bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200">
+                          Optional
                         </span>
                       </div>
                       <input 
@@ -834,7 +859,7 @@ export default function App() {
                         placeholder="AIzaSy... (Saved locally in browser)"
                       />
                       <p className="text-[10px] text-gray-400 ml-1">
-                        If your host server environment variable is missing or unreachable, the Virtual Host AI will use this key directly.
+                        If provided, direct Gemini client calls will be attempted before OpenRouter.
                       </p>
                     </div>
                   </div>

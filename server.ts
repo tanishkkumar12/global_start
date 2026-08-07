@@ -8,7 +8,7 @@ import fs from "fs";
 dotenv.config();
 
 const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
+  apiKey: process.env.GEMINI_API_KEY || "dummy_key",
   httpOptions: {
     headers: {
       "User-Agent": "aistudio-build",
@@ -17,22 +17,7 @@ const ai = new GoogleGenAI({
 });
 
 function getOpenRouterApiKey(): string | undefined {
-  if (process.env.OPENROUTER_API_KEY) {
-    return process.env.OPENROUTER_API_KEY;
-  }
-  try {
-    const filePath = path.join(process.cwd(), ".env.example");
-    if (fs.existsSync(filePath)) {
-      const content = fs.readFileSync(filePath, "utf-8");
-      const match = content.match(/OPENROUTER_API_KEY\s*=\s*([^\s#\n]+)/);
-      if (match && match[1]) {
-        return match[1].trim();
-      }
-    }
-  } catch (err) {
-    console.error("Error reading OPENROUTER_API_KEY from .env.example:", err);
-  }
-  return undefined;
+  return process.env.OPENROUTER_API_KEY?.trim();
 }
 
 async function generateStreamWithRetry(contents: any, systemInstruction: any) {

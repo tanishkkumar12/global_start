@@ -1,6 +1,101 @@
 import { generateSystemPrompt } from "./utils";
 import { RestaurantConfig } from "./types";
 
+async function callOpenRouterClientSideStream(
+  apiKey: string,
+  message: string,
+  history: { role: string; content?: string; text?: string }[],
+  systemInstruction: string,
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal
+) {
+  const models = [
+    "google/gemini-2.5-flash",
+    "google/gemini-flash-1.5",
+    "meta-llama/llama-3.1-8b-instruct",
+    "deepseek/deepseek-r1-distill-llama-8b"
+  ];
+
+  const historyMessages = history.map((msg) => ({
+    role: msg.role === "user" ? "user" : "assistant",
+    content: msg.content || msg.text || ""
+  }));
+
+  const messages = [
+    ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+    ...historyMessages,
+    { role: "user", content: message }
+  ];
+
+  let lastErr: any = null;
+
+  for (const model of models) {
+    try {
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": typeof window !== "undefined" ? window.location.origin : "https://ai.studio/build",
+          "X-Title": "Restaurant Applet",
+        },
+        signal,
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`OpenRouter ${model} status ${res.status}: ${errText}`);
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response reader");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        let lineIndex;
+        while ((lineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, lineIndex).trim();
+          buffer = buffer.slice(lineIndex + 1);
+
+          if (line.startsWith("data:")) {
+            const dataStr = line.slice(5).trim();
+            if (dataStr === "[DONE]") {
+              return; // Success!
+            }
+            try {
+              const parsed = JSON.parse(dataStr);
+              const text = parsed.choices?.[0]?.delta?.content;
+              if (text) {
+                onChunk(text);
+              }
+            } catch (e) {
+              /* ignore partial json */
+            }
+          }
+        }
+      }
+      return; // Success!
+    } catch (err: any) {
+      if (err.name === "AbortError") throw err;
+      lastErr = err;
+      console.warn(`[Client-side OpenRouter] Model ${model} failed:`, err);
+    }
+  }
+
+  throw lastErr || new Error("Client-side OpenRouter streaming failed");
+}
+
 async function callGeminiClientSideStream(
   apiKey: string,
   message: string,
@@ -100,7 +195,6 @@ export class AIService {
   ) {
     let serverFailed = false;
     let serverErrorMsg = "";
-    let serverStatusCode = 0;
 
     // 1. Try server endpoint /api/chat first
     try {
@@ -119,8 +213,6 @@ export class AIService {
           systemInstruction: this.systemInstruction,
         }),
       });
-
-      serverStatusCode = response.status;
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -165,7 +257,6 @@ export class AIService {
                     onChunk(parsed.text);
                   }
                 } catch (e) {
-                  // Fallback string extraction if needed
                   if (data && data !== ":" && !data.includes("keepalive") && !data.includes("heartbeat")) {
                     const match = data.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"/);
                     if (match && match[1]) {
@@ -189,48 +280,54 @@ export class AIService {
       console.warn("Server /api/chat error:", error);
     }
 
-    // 2. If server failed, check for client-side API key fallback
+    // 2. Client-side Gemini fallback if key is configured locally
     const customKey = typeof window !== "undefined" ? localStorage.getItem("resto_gemini_api_key") : null;
     const viteKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-    const clientApiKey = (customKey || viteKey || "").trim();
+    const clientGeminiKey = (customKey || viteKey || "").trim();
 
-    if (clientApiKey) {
-      console.log("[AIService] Server /api/chat unavailable. Attempting direct client-side Gemini call...");
+    if (clientGeminiKey) {
+      console.log("[AIService] Server /api/chat unavailable. Trying direct client-side Gemini call...");
       try {
         await callGeminiClientSideStream(
-          clientApiKey,
+          clientGeminiKey,
           message,
           history,
           this.systemInstruction,
           onChunk,
           signal
         );
-        return; // Client-side streaming succeeded!
+        return; // Client-side Gemini streaming succeeded!
       } catch (clientErr: any) {
         if (clientErr.name === "AbortError") throw clientErr;
-        console.error("[AIService] Client-side Gemini call also failed:", clientErr);
-        serverErrorMsg = clientErr.message || serverErrorMsg;
+        console.warn("[AIService] Client-side Gemini call failed, trying OpenRouter fallback...", clientErr);
       }
     }
 
-    // 3. Construct explicit, actionable error message for the user
-    let userFriendlyMsg = "";
-    const lowerErr = serverErrorMsg.toLowerCase();
+    // 3. Client-side OpenRouter fallback if user entered a custom key or VITE_OPENROUTER_API_KEY
+    const customOpenRouterKey = typeof window !== "undefined" ? localStorage.getItem("resto_openrouter_api_key") : null;
+    const viteOpenRouterKey = (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+    const openRouterKeyToUse = (customOpenRouterKey || viteOpenRouterKey || "").trim();
 
-    if (serverStatusCode === 404 || lowerErr.includes("404") || lowerErr.includes("not found")) {
-      userFriendlyMsg = "The server AI endpoint (/api/chat) was not found (404). If you hosted this as a static site (e.g. GitHub Pages or Netlify static), please go to Admin Configuration -> AI Virtual Host and enter your Gemini API Key to enable direct client-side AI chat!";
-    } else if (lowerErr.includes("gemini_api_key") || lowerErr.includes("key is not configured") || lowerErr.includes("key is missing")) {
-      userFriendlyMsg = "The GEMINI_API_KEY environment variable is not configured on your host server. Please add `GEMINI_API_KEY` to your deployment environment variables (Vercel, Netlify, Cloud Run), or enter a custom key in the Admin Configuration panel!";
-    } else if (lowerErr.includes("503") || lowerErr.includes("unavailable") || lowerErr.includes("high demand") || lowerErr.includes("temporary") || lowerErr.includes("busy")) {
-      userFriendlyMsg = "The AI service is experiencing a temporary spike in high demand (Error 503). Please wait a few seconds and send your message again! Our menu and kitchen ordering remain fully operational.";
-    } else if (lowerErr.includes("429") || lowerErr.includes("rate limit") || lowerErr.includes("quota")) {
-      userFriendlyMsg = "The AI service rate limit was reached (Error 429). Please wait a few seconds before sending another message.";
-    } else if (serverErrorMsg) {
-      userFriendlyMsg = `AI connection error: ${serverErrorMsg}. Please check your server environment variables or enter a custom Gemini API key in Admin Configuration.`;
-    } else {
-      userFriendlyMsg = "Could not connect to the AI host service. If you are hosting on a custom server, please ensure GEMINI_API_KEY is set in your environment variables or configure a key in Admin settings.";
+    if (openRouterKeyToUse) {
+      console.log("[AIService] Attempting direct client-side OpenRouter fallback...");
+      try {
+        await callOpenRouterClientSideStream(
+          openRouterKeyToUse,
+          message,
+          history,
+          this.systemInstruction,
+          onChunk,
+          signal
+        );
+        return; // Client-side OpenRouter streaming succeeded!
+      } catch (orErr: any) {
+        if (orErr.name === "AbortError") throw orErr;
+        console.error("[AIService] Client-side OpenRouter call failed:", orErr);
+        serverErrorMsg = orErr.message || serverErrorMsg;
+      }
     }
 
-    onChunk(`\n\n[AI Connection Notice: ${userFriendlyMsg}]`);
+    // 4. Construct error message if all failed
+    onChunk(`\n\n[AI Connection Notice: Could not connect to AI services. Please try again in a few seconds or check your OpenRouter API key.]`);
   }
 }

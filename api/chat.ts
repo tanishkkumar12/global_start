@@ -14,7 +14,13 @@ const ai = new GoogleGenAI({
 });
 
 async function generateStreamWithRetry(contents: any, systemInstruction: any) {
-  const models = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
+  const models = [
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b"
+  ];
   let lastError: any = null;
 
   for (const model of models) {
@@ -41,8 +47,9 @@ async function generateStreamWithRetry(contents: any, systemInstruction: any) {
         const is503 = errStatus === 503 || errMsg.includes("503") || errMsg.toLowerCase().includes("unavailable") || errMsg.toLowerCase().includes("high demand") || errMsg.toLowerCase().includes("temporary");
 
         if (is429) {
-          if (model === "gemini-3.5-flash") {
-            console.warn(`[Gemini API Edge] Quota limit hit on ${model}. Switching to fallback model: gemini-3.1-flash-lite...`);
+          const modelIndex = models.indexOf(model);
+          if (modelIndex < models.length - 1) {
+            console.warn(`[Gemini API Edge] Quota limit hit on ${model}. Switching to fallback model: ${models[modelIndex + 1]}...`);
             break; // try the next model
           }
         }
@@ -52,10 +59,12 @@ async function generateStreamWithRetry(contents: any, systemInstruction: any) {
           await new Promise((resolve) => setTimeout(resolve, delay));
           delay *= 2; // exponential backoff
         } else {
-          if (model === "gemini-3.5-flash") {
-            console.warn(`[Gemini API Edge] Failover from ${model} to fallback model due to: ${errMsg}`);
+          const modelIndex = models.indexOf(model);
+          if (modelIndex < models.length - 1) {
+            console.warn(`[Gemini API Edge] Failover from ${model} to fallback model ${models[modelIndex + 1]} due to: ${errMsg}`);
             break; // try the next model
           } else {
+            console.error(`[Gemini API Edge] All Gemini models exhausted. Final error on ${model}: ${errMsg}`);
             throw error;
           }
         }

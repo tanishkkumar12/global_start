@@ -1,8 +1,0 @@
-{
-  "name": "RestoHost AI",
-  "description": "A customizable AI virtual host for restaurants. Includes an interactive digital menu, contactless table-ordering checkout, real-time kitchen tracking, and business configurators.",
-  "requestFramePermissions": [],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
-}
